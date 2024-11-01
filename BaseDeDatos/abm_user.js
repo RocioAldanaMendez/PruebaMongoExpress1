@@ -11,12 +11,12 @@ mongoose.connect('mongodb://localhost:27017/alumnos')
     })
     .catch(error => console.error("Error al conectar a MongoDB:", error.message));
 
-// Definimos el esquema de usuario
 const usuarioSchema = mongoose.Schema({
     nombre: String,
     email: String,
     edad: Number,
-    role: { type: mongoose.Schema.Types.ObjectId, ref: 'Role' } // Asociación con rol
+    role: { type: mongoose.Schema.Types.ObjectId, ref: 'Role' }, // Asociación con rol
+    year: { type: mongoose.Schema.Types.ObjectId, ref: 'Year' } // Asociación con el año académico
 });
 
 // Definimos el esquema de rol
@@ -30,6 +30,23 @@ const permisoSchema = mongoose.Schema({
     nombre: String,
     descripcion: String
 });
+
+// Definimos el esquema del año de los alumnos
+const yearSchema = mongoose.Schema({
+    nombre: String, // Ej. "Primer Año"
+});
+
+// Definimos el esquema de las publicaciones
+const postSchema = mongoose.Schema({
+    contenido: String,
+    autor: { type: mongoose.Schema.Types.ObjectId, ref: 'Usuario' },
+    year: { type: mongoose.Schema.Types.ObjectId, ref: 'Year' }, // Publicación visible solo para este año
+    fechaCreacion: { type: Date, default: Date.now }
+});
+
+// Creamos los modelos de `Year` y `Post`
+const Year = mongoose.model('Year', yearSchema);
+const Post = mongoose.model('Post', postSchema);
 
 // Creamos modelos basados en los esquemas
 const Usuario = mongoose.model('Usuario', usuarioSchema);
@@ -140,19 +157,35 @@ async function crearRolesYPermisos() {
             return; // Termina la función si ya existen roles
         }
 
+        // Permisos para usuarios
         const permisoCrear = new Permiso({ nombre: 'crear_usuario', descripcion: 'Permite crear nuevos usuarios' });
         const permisoEliminar = new Permiso({ nombre: 'eliminar_usuario', descripcion: 'Permite eliminar usuarios' });
         const permisoVer = new Permiso({ nombre: 'ver_usuarios', descripcion: 'Permite ver todos los usuarios' });
         const permisoModificar = new Permiso({ nombre: 'modificar_usuario', descripcion: 'Permite modificar datos de usuarios' });
 
+        // Nuevos permisos para publicaciones
+        const permisoCrearPost = new Permiso({ nombre: 'crear_post', descripcion: 'Permite crear nuevas publicaciones' });
+        const permisoVerPost = new Permiso({ nombre: 'ver_post', descripcion: 'Permite ver publicaciones del mismo año' });
+
+        // Guardar permisos en la base de datos
         await permisoCrear.save();
         await permisoEliminar.save();
         await permisoVer.save();
         await permisoModificar.save();
+        await permisoCrearPost.save();
+        await permisoVerPost.save();
 
-        const rolAdmin = new Role({ nombre: 'Administrador', permisos: [permisoCrear._id, permisoEliminar._id, permisoVer._id, permisoModificar._id] });
-        const rolUsuario = new Role({ nombre: 'Usuario', permisos: [permisoVer._id] });
+        // Crear roles con los permisos adecuados
+        const rolAdmin = new Role({ 
+            nombre: 'Administrador', 
+            permisos: [permisoCrear._id, permisoEliminar._id, permisoVer._id, permisoModificar._id, permisoCrearPost._id, permisoVerPost._id] 
+        });
+        const rolUsuario = new Role({ 
+            nombre: 'Usuario', 
+            permisos: [permisoVer._id, permisoVerPost._id, permisoCrearPost._id] 
+        });
 
+        // Guardar roles en la base de datos
         await rolAdmin.save();
         await rolUsuario.save();
 
@@ -161,6 +194,35 @@ async function crearRolesYPermisos() {
         console.error("Error al crear roles y permisos:", error.message);
     }
 }
+
+
+//--------esto es para accesos
+
+// Crear una publicación (requiere permiso 'crear_post')
+app.post('/posts', verificarPermiso('crear_post'), async (req, res) => {
+    try {
+        const post = new Post({
+            contenido: req.body.contenido,
+            autor: req.body.userId,
+            year: req.body.yearId
+        });
+        await post.save();
+        res.status(201).json(post);
+    } catch (error) {
+        res.status(400).json({ mensaje: error.message });
+    }
+});
+
+// Ver publicaciones del mismo año que el usuario (requiere permiso 'ver_post')
+app.get('/posts', verificarPermiso('ver_post'), async (req, res) => {
+    try {
+        const usuario = await Usuario.findById(req.body.userId).populate('year');
+        const posts = await Post.find({ year: usuario.year }).populate('autor', 'nombre');
+        res.json(posts);
+    } catch (error) {
+        res.status(500).json({ mensaje: error.message });
+    }
+});
 
 // Configuramos el puerto del servidor
 const PORT = 3000;
